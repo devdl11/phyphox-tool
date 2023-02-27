@@ -28,7 +28,7 @@ class PhyphoxPhone:
         self.allChannelsReq: str = ""
         self.startAt = 0
         self.endAt = 0
-        self.deltaTime = 0
+        self.deltaTime = 1
 
         self._didLastRequestFailed = False
         self._internalClock = 0
@@ -117,11 +117,11 @@ class PhyphoxPhone:
                         raise ConnectionError
                     result = await response.json()
                     self.dataBuffer.append(DataFrame(self._internalClock, {channel: result["buffer"][channel]["buffer"][0] for channel in self.dataChannels}))
-                    self._internalClock += frameRate
+                    self._internalClock += frameRate * self.deltaTime
             except PhyphoxPhone.CONNECTION_ERROR:
                 self._didLastRequestFailed = True
                 self.dataBuffer.append(DataFrame(self._internalClock, None))
-                self._internalClock += frameRate
+                self._internalClock += frameRate * self.deltaTime
                 return
 
     async def getDataByHand(self, *args):
