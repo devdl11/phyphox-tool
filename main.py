@@ -1,5 +1,5 @@
 from rich.console import Console
-from rich.prompt import Confirm, IntPrompt, Prompt
+from rich.prompt import Confirm, IntPrompt
 from rich.progress import Progress
 from rich.live import Live
 from rich.table import Table
@@ -92,7 +92,7 @@ def addPhone() -> int:
                 continue
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.075)
+                s.settimeout(0.1)
                 remoteIP = f"{LOCAL_NETWORK_IP}{endpoint}"
                 s.connect((remoteIP, port))
                 s.close()
@@ -248,7 +248,7 @@ def _errorBeforeLaunching() -> bool:
 async def producerMinion(queue: multiprocessing.Queue, device: PhyphoxPhone):
     await device.getCurrentData(frameRate)
     queue.put((device.ip, device.dataBuffer[-1]))
-    await asyncio.sleep(frameRate/device.deltaTime)
+    await asyncio.sleep(frameRate * device.deltaTime)
 
 
 async def experimentProducer(output: multiprocessing.Queue, iinput: multiprocessing.Queue) -> None:
@@ -285,6 +285,7 @@ def generateExperimentStatusTable(queue: multiprocessing.Queue, startedAt: int):
     table.add_row(f"Experiment started {(time.time_ns() - startedAt)/10**9}s ago")
     table.add_row("Press CTRL-C to stop the experiment")
     return table
+
 
 async def runExperiment() -> int:
     global frameRate, delayRequest, requestTimeError, doRunExperiment
