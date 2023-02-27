@@ -5,7 +5,7 @@ from rich.progress import Progress
 import asyncio
 import threading
 
-from typing import Type, List
+from typing import Type, List, Dict
 from phyphox import PhyphoxPhone
 import socket
 import time
@@ -21,6 +21,7 @@ MENU_POINTER: int = 0
 doRun: bool = True
 phonesList: List[PhyphoxPhone] = list()
 alreadyPairedIps = set()
+runExperiment: bool = False
 
 
 def getLocalIp() -> str:
@@ -81,7 +82,7 @@ def addPhone() -> int:
                 continue
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.05)
+                s.settimeout(0.075)
                 remoteIP = f"{LOCAL_NETWORK_IP}{endpoint}"
                 s.connect((remoteIP, port))
                 s.close()
@@ -175,7 +176,6 @@ async def deltaTimeTest(device: PhyphoxPhone):
     await device.stopExperiment()
     await asyncio.sleep(0.01)
     remoteTime = await device.getRemoteTime()
-    print(remoteTime)
     if remoteTime is None:
         return
     if len(remoteTime) < 2:
@@ -189,10 +189,20 @@ async def deltaTimeTest(device: PhyphoxPhone):
             remoteEnd = rem["experimentTime"]
     remoteDelta = remoteEnd - remoteStart
     localDelta = (device.endAt - device.startAt) / 10**9 - 0.01
-    console.log(f"{device.ip} - Remote : {remoteDelta} ; Local : {localDelta}")
+    console.log(f"[italic]      {device.ip} - Remote : {remoteDelta} ; Local : {localDelta}")
     await device.resetExperiment()
+    device.deltaTime = remoteDelta / localDelta
 
 
+async def latencyPhone5Test():
+    console.print("[italic] - Running 5 tests of latency per device...")
+    latencyResults: Dict[str, List[float]] = {device.ip: list() for device in phonesList}
+    for test in range(5):
+        await asyncio.gather(*(deltaTimeTest(device) for device in phonesList))
+        for device in phonesList:
+            latencyResults[device.ip].append(device.deltaTime)
+    for device in phonesList:
+        device.deltaTime = sum(latencyResults[device.ip])/5
 def dataServerLiveBroadcasting():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", SERVER_PORT))
@@ -206,6 +216,17 @@ def _errorBeforeLaunching() -> bool:
             input("Continue...")
             return True
     return False
+
+
+def experimentProducer(queue: asyncio.Queue) -> None:
+    """
+    This function must be launched in a different thread.
+    Here we collect the data from the devices and push it into the Queue.
+    :type queue: asyncio.Queue
+    :return: None
+    """
+
+    pass
 
 
 async def runExperiment() -> int:
@@ -227,7 +248,15 @@ async def runExperiment() -> int:
     await asyncio.gather(*(deltaTimeTest(device) for device in phonesList))
     if _errorBeforeLaunching():
         return 0
-
+    console.print("[blue] -- Latency Results :")
+    for device in phonesList:
+        console.print(" "*2, "--", device.ip, " : ", device.deltaTime)
+    choice = Confirm.ask("Do you want to do more tests regarding the latency ?", default=False)
+    if choice:
+        await latencyPhone5Test()
+        console.print("[blue] -- Advance Latency Results :")
+        for device in phonesList:
+            console.print(" " * 2, "--", device.ip, " : ", device.deltaTime)
     return 0
 
 

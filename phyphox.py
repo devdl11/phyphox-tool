@@ -24,6 +24,7 @@ class PhyphoxPhone:
         self.dataChannels: List[str] = list()
         self.startAt = 0
         self.endAt = 0
+        self.deltaTime = 0
 
         self._didLastRequestFailed = False
         self._internalClock = 0
