@@ -1,14 +1,20 @@
 from rich.console import Console
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.progress import Progress
+from rich.live import Live
+from rich.table import Table
 
 import asyncio
 import multiprocessing
+import signal
+import threading
+
 
 from typing import Type, List, Dict
 from phyphox import PhyphoxPhone
 import socket
 import time
+import json
 
 ### CONSTANT
 PORT = 8080
@@ -21,10 +27,11 @@ MENU_POINTER: int = 0
 doRun: bool = True
 phonesList: List[PhyphoxPhone] = list()
 alreadyPairedIps = set()
-runExperiment: bool = False
+doRunExperiment: bool = False
 frameRate = 1/25
-delayRequest = 0.02
+delayRequest = 0.03
 requestTimeError = 0
+packetsSent = 0
 
 
 def getLocalIp() -> str:
@@ -211,9 +218,21 @@ async def latencyPhone5Test():
     return requestTimeError <= len(phonesList) * 5 // 2
 
 
-def dataServerLiveBroadcasting():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("0.0.0.0", SERVER_PORT))
+def dataServerLiveBroadcasting(output: multiprocessing.Queue):
+    """
+    This function must be run in a different thread in order to keep the interactive console.
+    Here we broadcast the data gathered to a local port using the UDP protocol.
+    The user can listen to the port to handle the data
+    :return:
+    """
+    global packetsSent
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    console.print("[cyan] Broadcasting on", SERVER_PORT)
+    while doRunExperiment or output.qsize() > 0:
+        data = output.get()
+        packet = {data[0]: data[1].toJson()}
+        server.sendto(json.dumps(packet).encode(), ("127.0.0.1", SERVER_PORT))
+        packetsSent += 1
 
 
 def _errorBeforeLaunching() -> bool:
@@ -228,7 +247,7 @@ def _errorBeforeLaunching() -> bool:
 
 async def producerMinion(queue: multiprocessing.Queue, device: PhyphoxPhone):
     await device.getCurrentData(frameRate)
-    queue.put(device.dataBuffer[-1])
+    queue.put((device.ip, device.dataBuffer[-1]))
     await asyncio.sleep(frameRate/device.deltaTime)
 
 
@@ -240,6 +259,7 @@ async def experimentProducer(output: multiprocessing.Queue, iinput: multiprocess
             if iinput.get():
                 break
     await asyncio.gather(*(device.stopExperiment() for device in phonesList))
+    await asyncio.sleep(delayRequest)
     await asyncio.gather(*(device.resetExperiment() for device in phonesList))
 
 
@@ -251,11 +271,23 @@ def experimentProducerProcessLauncher(output: multiprocessing.Queue, iinput: mul
     :param output: Queue Process --> Main
     :return: None
     """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     asyncio.run(experimentProducer(output, iinput))
 
 
+def generateExperimentStatusTable(queue: multiprocessing.Queue, startedAt: int):
+    table = Table()
+    table.add_row(f"Number of devices: {len(phonesList)}")
+    table.add_row(f"Packets sent: {packetsSent}")
+    table.add_row(f"In queue data: {queue.qsize()}")
+    table.add_row(f"Server Port: {SERVER_PORT}")
+    table.add_row()
+    table.add_row(f"Experiment started {(time.time_ns() - startedAt)/10**9}s ago")
+    table.add_row("Press CTRL-C to stop the experiment")
+    return table
+
 async def runExperiment() -> int:
-    global frameRate, delayRequest, requestTimeError
+    global frameRate, delayRequest, requestTimeError, doRunExperiment
     console.print("-"*2, "RUN EXPERIMENT", "-"*2)
     if len(phonesList) == 0:
         console.print("[red] Please connect a least one device to launch the experiment mode !")
@@ -294,12 +326,38 @@ async def runExperiment() -> int:
     frameRate = 1 / IntPrompt.ask("How many data per second (frame rate) do you want ?", default=25)
     mainQueue = multiprocessing.Queue()
     commanderQueue = multiprocessing.Queue()
+    doRunExperiment = True
     console.print("[italic] - Starting the experimentProducer process...")
     background_process = multiprocessing.Process(target=experimentProducerProcessLauncher, args=(mainQueue, commanderQueue,), daemon=True)
     background_process.start()
     console.print("[italic] - Waiting for the process...")
     mainQueue.get()
-    input("> ")
+    started_at = time.time_ns()
+    console.print("[italic] - Starting the broadcasting server...")
+    server_thread = threading.Thread(target=dataServerLiveBroadcasting, args=(mainQueue, ), daemon=True)
+    server_thread.start()
+    with Live(generateExperimentStatusTable(mainQueue, started_at), refresh_per_second=5) as live:
+        while doRunExperiment:
+            try:
+                live.update(generateExperimentStatusTable(mainQueue, started_at))
+
+            except KeyboardInterrupt:
+                console.print("[red] Interruption request detected !")
+                doRunExperiment = False
+    console.print("[italic] Noticing background service...")
+    commanderQueue.put(True)
+    console.print("[italic] Waiting for the server...")
+    with Progress() as progress:
+        maxSize = mainQueue.qsize()
+        task = progress.add_task("[green] Dispatch remaining data...", total=maxSize)
+        while mainQueue.qsize() > 0:
+            delta = maxSize - mainQueue.qsize()
+            maxSize = mainQueue.qsize()
+            progress.update(task, advance=delta)
+    console.print("[italic] Waiting for the background service to end...")
+    background_process.join()
+    console.print("[bold] All done !")
+    input("Continue... ")
     return 0
 
 

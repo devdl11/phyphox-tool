@@ -9,6 +9,9 @@ class DataFrame:
     t: float
     data: object
 
+    def toJson(self):
+        return {"time": self.t, "data": self.data}
+
 
 # TODO: create a parent class Phyphox from which we implement different devices
 class PhyphoxPhone:
@@ -112,7 +115,8 @@ class PhyphoxPhone:
                 async with client.get(f"{self.baseAddress}/get?{self.allChannelsReq}") as response:
                     if response.status != 200:
                         raise ConnectionError
-                    self.dataBuffer.append(DataFrame(self._internalClock, await response.json()))
+                    result = await response.json()
+                    self.dataBuffer.append(DataFrame(self._internalClock, {channel: result["buffer"][channel]["buffer"][0] for channel in self.dataChannels}))
                     self._internalClock += frameRate
             except PhyphoxPhone.CONNECTION_ERROR:
                 self._didLastRequestFailed = True
