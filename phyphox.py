@@ -6,7 +6,7 @@ import time
 
 @dataclass
 class DataFrame:
-    t: int
+    t: float
     data: object
 
 
@@ -22,6 +22,7 @@ class PhyphoxPhone:
         self.config = {}
         self.dataBuffer: List[DataFrame] = list()
         self.dataChannels: List[str] = list()
+        self.allChannelsReq: str = ""
         self.startAt = 0
         self.endAt = 0
         self.deltaTime = 0
@@ -51,9 +52,11 @@ class PhyphoxPhone:
                         self._didLastRequestFailed = True
                         return
                     self.config = await response.json()
+                    self.dataChannels.clear()
                     for inp in self.config["inputs"]:
                         for channel in inp["outputs"]:
                             self.dataChannels.extend(channel.values())
+                    self.allChannelsReq = "&".join(self.dataChannels)
             except PhyphoxPhone.CONNECTION_ERROR:
                 self._didLastRequestFailed = True
 
@@ -97,11 +100,33 @@ class PhyphoxPhone:
             try:
                 async with client.get(f"{self.baseAddress}/time") as response:
                     if response.status != 200:
-                        self._didLastRequestFailed = True
-                        return
+                        raise ConnectionError
                     return await response.json()
             except PhyphoxPhone.CONNECTION_ERROR as e:
                 self._didLastRequestFailed = True
                 return None
 
+    async def getCurrentData(self, frameRate: float):
+        async with aiohttp.ClientSession() as client:
+            try:
+                async with client.get(f"{self.baseAddress}/get?{self.allChannelsReq}") as response:
+                    if response.status != 200:
+                        raise ConnectionError
+                    self.dataBuffer.append(DataFrame(self._internalClock, await response.json()))
+                    self._internalClock += frameRate
+            except PhyphoxPhone.CONNECTION_ERROR:
+                self._didLastRequestFailed = True
+                self.dataBuffer.append(DataFrame(self._internalClock, None))
+                self._internalClock += frameRate
+                return
 
+    async def getDataByHand(self, *args):
+        async with aiohttp.ClientSession() as client:
+            try:
+                async with client.get(f"{self.baseAddress}/get?{'&'.join(args)}") as response:
+                    if response != 200:
+                        raise ConnectionError
+                    return response.json()
+            except PhyphoxPhone.CONNECTION_ERROR:
+                self._didLastRequestFailed = True
+                return None

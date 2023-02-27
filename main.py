@@ -3,7 +3,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.progress import Progress
 
 import asyncio
-import threading
+import multiprocessing
 
 from typing import Type, List, Dict
 from phyphox import PhyphoxPhone
@@ -22,6 +22,9 @@ doRun: bool = True
 phonesList: List[PhyphoxPhone] = list()
 alreadyPairedIps = set()
 runExperiment: bool = False
+frameRate = 1/25
+delayRequest = 0.02
+requestTimeError = 0
 
 
 def getLocalIp() -> str:
@@ -170,16 +173,18 @@ async def isPhyphoxPhoneAlive(device: PhyphoxPhone):
 
 
 async def deltaTimeTest(device: PhyphoxPhone):
+    global requestTimeError
     await device.resetExperiment()
     await device.startExperiment()
     await asyncio.sleep(2)
     await device.stopExperiment()
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(delayRequest)
     remoteTime = await device.getRemoteTime()
     if remoteTime is None:
         return
     if len(remoteTime) < 2:
         device._didLastRequestFailed = True
+        requestTimeError += 1
         return
     remoteStart = remoteEnd = 0
     for rem in remoteTime:
@@ -188,7 +193,7 @@ async def deltaTimeTest(device: PhyphoxPhone):
         elif rem["event"] == "PAUSE":
             remoteEnd = rem["experimentTime"]
     remoteDelta = remoteEnd - remoteStart
-    localDelta = (device.endAt - device.startAt) / 10**9 - 0.01
+    localDelta = (device.endAt - device.startAt) / 10**9 - delayRequest
     console.log(f"[italic]      {device.ip} - Remote : {remoteDelta} ; Local : {localDelta}")
     await device.resetExperiment()
     device.deltaTime = remoteDelta / localDelta
@@ -203,6 +208,9 @@ async def latencyPhone5Test():
             latencyResults[device.ip].append(device.deltaTime)
     for device in phonesList:
         device.deltaTime = sum(latencyResults[device.ip])/5
+    return requestTimeError <= len(phonesList) * 5 // 2
+
+
 def dataServerLiveBroadcasting():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", SERVER_PORT))
@@ -218,18 +226,36 @@ def _errorBeforeLaunching() -> bool:
     return False
 
 
-def experimentProducer(queue: asyncio.Queue) -> None:
+async def producerMinion(queue: multiprocessing.Queue, device: PhyphoxPhone):
+    await device.getCurrentData(frameRate)
+    queue.put(device.dataBuffer[-1])
+    await asyncio.sleep(frameRate/device.deltaTime)
+
+
+async def experimentProducer(output: multiprocessing.Queue, iinput: multiprocessing.Queue) -> None:
+    await asyncio.gather(*(device.startExperiment() for device in phonesList))
+    while True:
+        await asyncio.gather(*(producerMinion(output, device) for device in phonesList))
+        if iinput.qsize() > 0:
+            if iinput.get():
+                break
+    await asyncio.gather(*(device.stopExperiment() for device in phonesList))
+    await asyncio.gather(*(device.resetExperiment() for device in phonesList))
+
+
+def experimentProducerProcessLauncher(output: multiprocessing.Queue, iinput: multiprocessing.Queue) -> None:
     """
-    This function must be launched in a different thread.
-    Here we collect the data from the devices and push it into the Queue.
-    :type queue: asyncio.Queue
+    This function must be launched in a different process.
+    It's used as a trampoline for the main function.
+    :param iinput: Queue Main --> Process
+    :param output: Queue Process --> Main
     :return: None
     """
-
-    pass
+    asyncio.run(experimentProducer(output, iinput))
 
 
 async def runExperiment() -> int:
+    global frameRate, delayRequest, requestTimeError
     console.print("-"*2, "RUN EXPERIMENT", "-"*2)
     if len(phonesList) == 0:
         console.print("[red] Please connect a least one device to launch the experiment mode !")
@@ -253,10 +279,27 @@ async def runExperiment() -> int:
         console.print(" "*2, "--", device.ip, " : ", device.deltaTime)
     choice = Confirm.ask("Do you want to do more tests regarding the latency ?", default=False)
     if choice:
-        await latencyPhone5Test()
-        console.print("[blue] -- Advance Latency Results :")
-        for device in phonesList:
-            console.print(" " * 2, "--", device.ip, " : ", device.deltaTime)
+        while True:
+            res = await latencyPhone5Test()
+            if not res:
+                console.print("[red] Error: too many failures ! Increasing the delay threshold...")
+                delayRequest += 0.01
+                requestTimeError = 0
+                continue
+            console.print("[blue] -- Advance Latency Results :")
+            for device in phonesList:
+                console.print(" " * 2, "--", device.ip, " : ", device.deltaTime)
+            break
+
+    frameRate = 1 / IntPrompt.ask("How many data per second (frame rate) do you want ?", default=25)
+    mainQueue = multiprocessing.Queue()
+    commanderQueue = multiprocessing.Queue()
+    console.print("[italic] - Starting the experimentProducer process...")
+    background_process = multiprocessing.Process(target=experimentProducerProcessLauncher, args=(mainQueue, commanderQueue,), daemon=True)
+    background_process.start()
+    console.print("[italic] - Waiting for the process...")
+    mainQueue.get()
+    input("> ")
     return 0
 
 
