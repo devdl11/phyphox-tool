@@ -9,8 +9,7 @@ import multiprocessing
 import signal
 import threading
 
-
-from typing import Type, List, Dict
+from typing import List, Dict
 from phyphox import PhyphoxPhone
 import socket
 import time
@@ -51,8 +50,8 @@ def getEndpointFromIp(ip: str) -> int:
 
 def mainMenu() -> int:
     console.print("-" * 2, "MAIN", "-" * 2)
-    console.print(" " * 2, "1 - Add a phone")
-    console.print(" " * 2, "2 - Manage paired phones")
+    console.print(" " * 2, "1 - Add device")
+    console.print(" " * 2, "2 - Manage paired devices")
     console.print(" " * 2, "3 - Launch the experiment")
     console.print(" " * 2, "4 - Exit")
 
@@ -203,7 +202,7 @@ async def deltaTimeTest(device: PhyphoxPhone):
     localDelta = (device.endAt - device.startAt) / 10**9 - delayRequest
     console.log(f"[italic]      {device.ip} - Remote : {remoteDelta} ; Local : {localDelta}")
     await device.resetExperiment()
-    device.deltaTime = remoteDelta / localDelta
+    device.deltaTime = localDelta / remoteDelta
 
 
 async def latencyPhone5Test():
@@ -345,7 +344,7 @@ async def runExperiment() -> int:
             except KeyboardInterrupt:
                 console.print("[red] Interruption request detected !")
                 doRunExperiment = False
-    console.print("[italic] Noticing background service...")
+    console.print("[italic] Notifying background service...")
     commanderQueue.put(True)
     console.print("[italic] Waiting for the server...")
     with Progress() as progress:
